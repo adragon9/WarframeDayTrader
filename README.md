@@ -12,3 +12,7 @@ Just type in whatever, if it exists in warframe market you'll find it. If not it
 ## Disclaimer
 
 All recommendations are based pretty much off my experiences so take that for what you will.
+
+## Special Notes
+
+- To update the apps icon, just put a png into the res\img folder and rename it "stonks.ico" and pray that it's the right size to work.
