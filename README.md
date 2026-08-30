@@ -11,8 +11,8 @@ Just type in whatever, if it exists in warframe market you'll find it. If not it
 
 ## Disclaimer
 
-1.) All recommendations are based pretty much off my experiences so take that for what you will.
-2.) This is not a bot, it is a search engine basically you still have to do the trading yourself.
+1. All recommendations are based pretty much off my experiences so take that for what you will.
+2. This is not a bot, it is a search engine basically you still have to do the trading yourself.
 
 ## Special Notes
 
