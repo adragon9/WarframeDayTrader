@@ -29,13 +29,14 @@ class Worker(QObject):
     main_messenger = pyqtSignal(str)
     sub_messenger = pyqtSignal(str)
     
-    def __init__(self):
+    def __init__(self, line_edit: QLineEdit):
         super().__init__()
+        self.line_edit = line_edit
         
-    def run(self, lineEdit1: QLineEdit):
+    def run(self):
         try:
-            price_recommender = ItemPrice.PriceRecommender(self.main_messenger, self.sub_messenger)
-            price_recommender.run(lineEdit1)
+            price_recommender = ItemPrice.PriceRecommender(self.main_messenger, self.sub_messenger, self.line_edit)
+            price_recommender.run()
         finally:
             self.finished.emit()
 
@@ -44,7 +45,6 @@ class MainWindow(QMainWindow):
         super().__init__()               
         self.worker_thread = None
         self.searchPlaceHolder = "Enter set or item you'd like info for..."
-        self.settings_init()
         self.ui_init()
         
     def ui_init(self):
@@ -64,7 +64,7 @@ class MainWindow(QMainWindow):
         self.display.setOpenExternalLinks(True)
         self.display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.display.setPlaceholderText("Awaiting search...")
-        
+                
         display_layout.addWidget(self.display)
         
         # Line Edit Groups
@@ -84,39 +84,78 @@ class MainWindow(QMainWindow):
         
         searchButton_group1.clicked.connect(self.run_button_action)
         self.lineEdit_group1.returnPressed.connect(self.run_button_action)
-        
-    def settings_init(self):
-        pass
-        
-    def progress_action(self, signal):            
-        pass
-    
+            
     def main_messenger_manager(self, signal):
-        self.display.setHtml(f"""
+        self.display.clear()
+        html = """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <style>
+                        body{
+                            text-align:center;
+                            font-family: calibri;
+                            font-size: 12pt;
+                        }
+                        table{
+                            border: 2px solid white;
+                            border-radius: 8px;
+                            overflow: hidden;
+                            border-collapse: collapse;
+                            margin: 0 auto;
+                        }
+                        th {
+                            
+                        }
+                        td, th{
+                            text-align: center;
+                            padding: 8px;
+                            margin: 0 auto;
+                        }
+                        .col-1 {
+                            text-align:left;
+                        }
+                        .col-2 {
+                            font-weight: bold;
+                        }
+                    </style>
+                </head>
+                """
+        html += f"""
+                <body>
+                    {signal}
+                </body>
+                </html>
+                """
+            
+        self.display.setHtml(html)
+    
+    def sub_messenger_manager(self, signal):
+        self.display.insertHtml(f"""
                              <div style="
                              text-align:center;
                              font-size:12pt;
                              font-family:Calibri;
                              ">
-                                {signal}
+                                {signal}<br>
                              </div>""")
-    
-    def sub_messenger_manager(self, signal):
-        pass
           
     def run_button_action(self):
         """Launch the CPU‑heavy job in a worker thread."""
+        self.display.clear()
         if self.worker_thread and self.worker_thread.isRunning():
             return
 
         # Create the QThread + Worker pair
         self.worker_thread = QThread()
-        self.worker = Worker() # keep reference
+        self.worker = Worker(self.lineEdit_group1) # keep reference
         self.worker.moveToThread(self.worker_thread)
             
         # Connect signals & slots
-        self.worker_thread.started.connect(lambda x=self.lineEdit_group1: self.worker.run(x))
+        self.worker_thread.started.connect(self.worker.run)
         self.worker.main_messenger.connect(self.main_messenger_manager)
+        self.worker.sub_messenger.connect(self.sub_messenger_manager)
         self.worker.finished.connect(self.on_worker_finished)
         self.worker.finished.connect(self.worker_thread.quit)
 

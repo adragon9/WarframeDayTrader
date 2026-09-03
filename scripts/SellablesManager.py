@@ -29,7 +29,6 @@ class ItemManager():
             
 
             # Faster search first
-            print(text)
             timer_start = time.perf_counter()
             for item in data["data"]:
                 try:
@@ -68,7 +67,10 @@ class ItemManager():
                         
                 except KeyError as e:
                     print(f"{item["slug"]} experienced {e}")
-            
+                    
+            timer_end = time.perf_counter()
+            print(f"Fuzzy match search took: {timer_end - timer_start}")
+                        
             perfect_matches = []
             if len(match_list) > 1:
                 match_list = sorted(match_list, key=lambda x: x["match_ratio"])
@@ -89,8 +91,6 @@ class ItemManager():
                     return (perfect_matches[-1]["slug"], perfect_matches[-1]["target_name"])
                 return (match_list[-1]["slug"], match_list[-1]["target_name"])
             elif len(match_list) == 1:
-                for item in match_list:
-                    print(item["target_name"], item["slug"], item["match_ratio"])
                 return (match_list[0]["slug"], match_list[0]["target_name"])
             
         return ("no_match", "no_match")

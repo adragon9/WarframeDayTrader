@@ -1,19 +1,23 @@
-from PyQt6.QtCore import pyqtBoundSignal, QStringConverter 
+from PyQt6.QtCore import pyqtBoundSignal
 from PyQt6.QtWidgets import (
     QLineEdit
 )
 from typing import Literal
 
-import requests, json, os, statistics
+import requests, statistics, regex
 import datetime as dt
 import scripts.SellablesManager
 
+import time
+
 class PriceRecommender():
-    def __init__(self, main_messenger: pyqtBoundSignal, sub_messenger: pyqtBoundSignal):
+    def __init__(self, main_messenger: pyqtBoundSignal, sub_messenger: pyqtBoundSignal, line_edit: QLineEdit):
         self.main_messenger = main_messenger
         self.sub_messenger = sub_messenger
+        self.line_edit = line_edit
     
     def _process_searchTerm(self, text: str, searcher: scripts.SellablesManager.ItemManager):
+        self.sub_messenger.emit("Processing search term...")
         """ 
         Process input text to reduce problems
         """
@@ -24,11 +28,17 @@ class PriceRecommender():
     
         return slug, name
     
-    def _create_url(self, text:str, type: Literal["orders"] = "orders") -> str:
+    def _create_url(self, text:str, type: Literal["orders", "sets"] = "orders") -> str:
+        self.sub_messenger.emit("Creating url...")
         if type == "orders":
             return f"https://api.warframe.market/v2/orders/item/{text}"
+        elif type == "sets":
+            return f"https://api.warframe.market/v2/item/{text}/set"
+        else:
+            return ""
     
     def _get_request(self, url:str):
+        self.sub_messenger.emit("Getting api request...")
         try:
             r = requests.get(url)
             return r.json()
@@ -36,7 +46,8 @@ class PriceRecommender():
             print(e)
             return {}
     
-    def _process_pricing_data(self, data: dict):            
+    def _process_data(self, data: dict, ignore_date = False):        
+        self.sub_messenger.emit("Processing pricing data...")    
         seller_data = []
         buyer_data = []
         date_format = "%Y-%m-%d %H:%M:%S"
@@ -46,26 +57,46 @@ class PriceRecommender():
                 update_time = dt.datetime.strptime(obj["updatedAt"].replace("Z", "").replace("T", " "), date_format)
                 days_since = (now - update_time).days
                 
-                if days_since > 2 and obj["user"]["status"] != "ingame":
+                if days_since > 2 and obj["user"]["status"] != "ingame" and not ignore_date:
                     continue
                 
                 elif obj["user"]["status"] != "ingame":
                     continue
                 
                 elif obj["type"] == "buy":
-                    buyer_data.append({
-                        "buyer":obj["user"]["ingameName"],
-                        "reputation":obj["user"]["reputation"],
-                        "itemQuantity":obj["quantity"],
-                        "buyPrice":obj["platinum"]
-                    })
+                    for _ in range(obj["quantity"]):
+                        try:
+                            buyer_data.append({
+                                "buyer":obj["user"]["ingameName"],
+                                "reputation":obj["user"]["reputation"],
+                                "itemQuantity":obj["quantity"],
+                                "buyPrice":obj["platinum"],
+                                "quantityInSet":obj["quantityInSet"]
+                            })
+                        except KeyError:
+                            buyer_data.append({
+                                "buyer":obj["user"]["ingameName"],
+                                "reputation":obj["user"]["reputation"],
+                                "itemQuantity":obj["quantity"],
+                                "buyPrice":obj["platinum"]
+                            })
                 elif obj["type"] == "sell":
-                    seller_data.append({
-                        "seller":obj["user"]["ingameName"],
-                        "reputation":obj["user"]["reputation"],
-                        "itemQuantity":obj["quantity"],
-                        "salePrice":obj["platinum"]
-                    })
+                    for _ in range(obj["quantity"]):
+                        try:
+                            seller_data.append({
+                                "seller":obj["user"]["ingameName"],
+                                "reputation":obj["user"]["reputation"],
+                                "itemQuantity":obj["quantity"],
+                                "salePrice":obj["platinum"],
+                                "quantityInSet":obj["quantityInSet"]
+                            })
+                        except KeyError:
+                            seller_data.append({
+                                "seller":obj["user"]["ingameName"],
+                                "reputation":obj["user"]["reputation"],
+                                "itemQuantity":obj["quantity"],
+                                "salePrice":obj["platinum"]
+                            })
                     
             return (seller_data, buyer_data)
         
@@ -73,7 +104,31 @@ class PriceRecommender():
             print(str(e))
             return [], []
 
+    def _sum_of_parts(self, set_data:dict):
+        result = 0
+        for item in set_data["data"]["items"]:
+            if not regex.match(r"\w*_\w*_set", item["slug"]):
+                self.sub_messenger.emit(f"Getting {item["i18n"]["en"]["name"]}'s minimum price...")    
+                item_url = self._create_url(item["slug"])
+                item_orders = self._get_request(item_url)
+                seller_data, buyer_data = self._process_data(item_orders, ignore_date=True)
+                seller_data = sorted(seller_data, key=lambda x: x["salePrice"])
+                try:
+                    logged_seller = {}
+                    for i in range(item["quantityInSet"]):
+                        if seller_data[i]["itemQuantity"] >= item["quantityInSet"] and not logged_seller:
+                            result += seller_data[0]["salePrice"] * item["quantityInSet"]
+                            break
+                        else:
+                            result += seller_data[i]["salePrice"]
+                            logged_seller = seller_data
+                except KeyError:
+                    print(seller_data)
+                time.sleep(.5)
+        return result
+        
     def _cull_prices(self, prices: list, mode: float|int, std_dev: float|int):
+        self.sub_messenger.emit("Culling outlier prices...")
         # Dynamic deviation adjustment
         if len(prices) < 10:
             std_dev_mod = std_dev
@@ -91,7 +146,8 @@ class PriceRecommender():
 
         return prices
     
-    def _process_pricing_recommendations(self, searchTerm: str, url: str, slug: str, seller_data: list, buyer_data: list):
+    def _process_pricing_recommendations(self, searchTerm: str, url: str, slug: str, seller_data: list, buyer_data: list, part_sum: int|float = 0):
+        self.sub_messenger.emit(f"Generating recommendations...")  
         if not seller_data and not buyer_data:
             if not searchTerm:
                 return f"<h3>Error, no search term was entered!" 
@@ -162,84 +218,161 @@ class PriceRecommender():
             top_buyer = "No buyers"
         
         # Results
-        # Price recommendations
-        result +=f"<h1>Pricing Recommendations</h1>"
-        result +=f"The most common sale price is <span style='color:#add8e6'>{mode[0]}p.</span><br>"
-        result +=f"To attempt to balance profit and sell speed try <span style='color:#add8e6'>{recommendation}p</span>.<br>"
-        result +=f"Average fair price is <span style='color:#add8e6'>{round(average_cost)}p</span>, though, you may sell slowly if you do this.<br>"
-        result +=f"To match the lowest seller sell for <span style='color:#add8e6'>{sale_prices[0]}p</span>.<br>"
-        result +=f"To <span style='color:#c64c4c'><b>outsell</b></span> the lowest seller sell for <span style='color:#add8e6'>{sale_prices[0]-1}p</span>.<span style='color:#c64c4c'><b>(NOT RECOMMENDED)</b></span><br>"
-        
-        if top_buyer != "No buyers" and abs(recommendation - top_buyer) < 5:
-            result += f"You should consider fulfilling the top buy order of <span style='color:#add8e6'>{top_buyer}p</span>, it is only <span style='color:#add8e6'>{abs(recommendation - top_buyer)}p</span> away from what is being recommended. This will be the quickest sale."
-                
-        result += "<hr>"
-        
         # Notices
-        result += "<h1>Notices</h1>"
         result += "<h2><span style='color:#c64c4c'>Remember, warframe.market is <b>extremely</b> prone to price wars!</span></h2>"
         result += "<h3><span style='color:#c64c4c'>This means if you sell lower than the lowest seller someone will likely try to one up you causing a collapse in pricing.</span></h3>"
         
         if purchase_prices and sale_prices[0] == purchase_prices[-1]:
-            result += (f"The highest buyer matches the lowest seller (<span style='color:#add8e6'>{sale_prices[0]}p</span>),"
-                       f" recommendation for immediate sale is to sell to the highest buyer.<br>")
+            result += (f"<p>The highest buyer matches the lowest seller (<span style='color:#add8e6'>{sale_prices[0]}p</span>),"
+                       f" recommendation for immediate sale is to sell to the highest buyer.<br></p>")
         elif purchase_prices and sale_prices:
             distance = abs(sale_prices[0] - purchase_prices[-1])
             result += (f"The highest buyer and lowest seller are <span style='color:#add8e6'>{distance}p</span> apart.<br>"
                        f" The highest <u>buyer</u> is at <span style='color:#add8e6'>{purchase_prices[-1]}p</span>"
-                       f" and the lowest <u>seller</u> is at <span style='color:#add8e6'>{sale_prices[0]}p</span>.<br>")
+                       f" and the lowest <u>seller</u> is at <span style='color:#add8e6'>{sale_prices[0]}p</span>.")
         else:
             result += "<h2>No Notices</h2>"
             
-        result += "<hr>"
+        # Price recommendations
+        result +=f"<h1>Pricing Recommendations</h1>"
+        result +=f"<div class='border-container-1'>"
+        result +=f"<table>"
+        result +=f"<tr>"
+        result +=f"<th></th>"
+        result +=f"<th>Platinum</th>"
+        result +=f"</tr>"
+        if part_sum != 0:
+            result +=f"<tr>"
+            result +=f"<td class='col-1'>Sum of parts</td>"
+            result +=f"<td class='col-2'><span style='color:#add8e6'>{part_sum}p</span></td>"
+            result +=f"</tr>"
+        result +=f"<tr>"
+        result +=f"<td class='col-1'>Most Common Price</td>"
+        result +=f"<td class='col-2'><span style='color:#add8e6'>{mode[0]}p</span></td>"
+        result +=f"</tr>" 
+        result +=f"<tr>"
+        result +=f"<td class='col-1'>Balanced Offer</td>"
+        result +=f"<td class='col-2'><span style='color:#add8e6'>{recommendation}p</span></td>"
+        result +=f"</tr>" 
+        result +=f"<tr>"
+        result +=f"<td class='col-1'>Average Price (Adjusted)</td>"
+        result +=f"<td class='col-2'><span style='color:#add8e6'>{round(average_cost)}p</span></td>"
+        result +=f"</tr>"
+        result +=f"<tr>"
+        result +=f"<td class='col-1'>Match Lowest</td>"
+        result +=f"<td class='col-2'><span style='color:#add8e6'>{sale_prices[0]}p</span></td>"
+        result +=f"</tr>" 
+        result +=f"<tr>"
+        result +=f"<td class='col-1'>Beat Lowest <span style='color:#c64c4c'><b>(Not Recommended)</span></td>"
+        result +=f"<td class='col-2'><span style='color:#add8e6'>{sale_prices[0]-1}p</span></td>"
+        result +=f"</tr>" 
+        result +=f"</table>"
+        result +=f"</div>"
         
+        if top_buyer != "No buyers" and abs(recommendation - top_buyer) <= 5:
+            result += f"You should consider fulfilling the top buy order of <span style='color:#add8e6'>{top_buyer}p</span>, it is only <span style='color:#add8e6'>{abs(recommendation - top_buyer)}p</span> away from what is being recommended. This will be the quickest sale."
+                
         # Detailed results
+        result +=f"<h1>Details</h1>"
         result += (
-            f"<h1>Seller Data</h1>"
-            f"Average: {round(average_cost)}<br>"
-            f"Median: {median}<br>"
-            f"Mode: {mode}<br>"
-            f"Lowest Seller: {sale_prices[0]}<br>"
-            f"<hr>"
-            f"<h1>Buyer Data</h1>"
-            f"Average: {average_cost_b}<br>"
-            f"Median: {median_b}<br>"
-            f"Mode: {mode_b}<br>"
-            f"Top Buyer: {top_buyer}<br>"
-            f"<hr>"
+            f"<table>"
+            f"<tr>"
+            f"<td colspan='2' style='background:#4c4c4c;'><b>Seller Data</b></td>"
+            f"</tr>"
+            f"<tr>"
+            f"<td class='col-1'>Average</td>"
+            f"<td>{round(average_cost)}</td>"
+            f"</tr>"
+            f"<tr>"
+            f"<td class='col-1'>Median</td>"
+            f"<td>{median}</td>"
+            f"</tr>"
+            f"<tr>"
+            f"<td class='col-1'>Mode</td>"
+            f"<td>{mode}</td>"
+            f"</tr>"
+            f"<tr>"
+            f"<td class='col-1'>Lowest Seller</td>"
+            f"<td>{sale_prices[0]}</td>"
+            f"</tr>"
+            f"<tr>"
+            f"<td colspan='2' style='background:#4c4c4c;'><b>Buyer Data</b></td>"
+            f"</tr>"
+            f"<tr>"
+            f"<td class='col-1'>Average</td>"
+            f"<td>{average_cost_b}</td>"
+            f"</tr>"
+            f"<tr>"
+            f"<td class='col-1'>Median</td>"
+            f"<td>{median_b}</td>"
+            f"</tr>"
+            f"<tr>"
+            f"<td class='col-1'>Mode</td>"
+            f"<td>{mode_b}</td>"
+            f"</tr>"
+            f"<tr>"
+            f"<td class='col-1'>Highest Buyer</td>"
+            f"<td>{top_buyer}</td>"
+            f"</tr>"
+            f"</table>"
         )
         
+        result += "<h1>Top Buyer & Seller</h1>"
+        result +=f"<table>"
         if seller_data:
             lowest_seller_data = seller_data[0]
-            result += "<h1>Lowest Seller</h1>"
+            result +=f"<tr><td colspan='2' style='background:#4c4c4c;'><b>Lowest Seller</b></td></tr>"
             for key in lowest_seller_data.keys():
                 if key == "seller":
-                    result+=f"{key}: <span style='color:#c64c4c'>{lowest_seller_data[key]}</span><br>"
+                    result+=f"<tr>"
+                    result+=f"<td class='col-1'>{key}</td>"
+                    result+=f"<td><span style='color:#c64c4c'>{lowest_seller_data[key]}</span></td>"
+                    result+=f"</tr>"
                 else:
-                    result+=f"{key}: {lowest_seller_data[key]}<br>"
-        
-        
+                    result+=f"<tr>"
+                    result+=f"<td class='col-1'>{key}</td>"
+                    result+=f"<td>{lowest_seller_data[key]}</td>"
+                    result+=f"</tr>"
+
         if buyer_data:
             highest_buyer_data = buyer_data[-1]
-            result+="<h1>Highest Buyer</h1>"
+            result +=f"<tr><td colspan='2' style='background:#4c4c4c;'><b>Top Buyer</b></td></tr>"
             for key in highest_buyer_data.keys():
                 if key == "buyer":
-                    result+=f"{key}: <span style='color:#c64c4c'>{highest_buyer_data[key]}</span><br>"
+                    result+=f"<tr>"
+                    result+=f"<td class='col-1'>{key}</td>"
+                    result+=f"<td><span style='color:#c64c4c'>{highest_buyer_data[key]}</span></td>"
+                    result+=f"</tr>"
                 else:
-                    result+=f"{key}: {highest_buyer_data[key]}<br>"
+                    result+=f"<tr>"
+                    result+=f"<td class='col-1'>{key}</td>"
+                    result+=f"<td>{highest_buyer_data[key]}</td>"
+                    result+=f"</tr>"
+                    
+        result +=f"</table>"
         
         return result
         
-    def run(self, input:QLineEdit):
+    def run(self):
+        user_input = self.line_edit
         searcher = scripts.SellablesManager.ItemManager()
-        searchTerm = input.text()
-        input.clear()       
+        searchTerm = user_input.text()
+        part_sum = 0
+        user_input.clear()
         
+        self.sub_messenger.emit("Starting")
         slug, name = self._process_searchTerm(searchTerm, searcher)
+        if regex.match(r"\w*_\w*_set", slug):
+            set_url = self._create_url(slug, "sets")
+            set_data = self._get_request(set_url)
+            part_sum = self._sum_of_parts(set_data)
         url = self._create_url(slug)
         response = self._get_request(url)
-        seller_data, buyer_data = self._process_pricing_data(response)
-        result_str = self._process_pricing_recommendations(name, url, slug, seller_data, buyer_data)
+        seller_data, buyer_data = self._process_data(response)
+        if part_sum != 0:
+            result_str = self._process_pricing_recommendations(name, url, slug, seller_data, buyer_data, part_sum)
+        else:
+            result_str = self._process_pricing_recommendations(name, url, slug, seller_data, buyer_data)
         
         self.main_messenger.emit(result_str)
         
