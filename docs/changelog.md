@@ -16,3 +16,11 @@
 ## Fixed
 
 - Implementation of the worker thread was wrong causing lock ups
+
+## Update 1.1.1 Alpha [9-3-2026]
+
+- Updated table formatting
+- Added rudimentary purchasing recommendations
+- Averages were possibly being calculated wrong
+- Fixed crash when there are no active sales
+- Program now accounts for multiples of the same part in a set

@@ -141,8 +141,6 @@ class PriceRecommender():
         for cost in prices[:]:
             if cost > mode + std_dev_mod:
                 prices.remove(cost)
-            elif cost < mode - std_dev_mod:
-                prices.remove(cost)
 
         return prices
     
@@ -153,7 +151,9 @@ class PriceRecommender():
                 return f"<h3>Error, no search term was entered!" 
             else:
                 return f"<h3>Error, there was a problem retrieving the data for <i>{searchTerm}</i></h3>" 
-        
+        elif not seller_data:
+            return f"<h3>Error, there is no seller data for this item.</h3><br><h3>Please try again later.</h3>"
+
         result = (f"<h2>Searched for:"
                   f" <a href='https://warframe.market/items/{slug}'>{searchTerm}</a></h2>")
         
@@ -173,11 +173,11 @@ class PriceRecommender():
         
         # Gather stats (SELLERS)
         if len(sale_prices) > 1:
-            average_cost = statistics.mean(sale_prices)
-            median = statistics.median(sale_prices)
             mode = statistics.multimode(sale_prices)
             std_dev = statistics.stdev(sale_prices)
             sale_prices = self._cull_prices(sale_prices, mode=mode[0], std_dev=std_dev)
+            average_cost = statistics.mean(sale_prices)
+            median = statistics.median(sale_prices)
         elif len(sale_prices) == 1:
             average_cost = purchase_prices[0]
             median = purchase_prices[0]
@@ -224,40 +224,56 @@ class PriceRecommender():
         
         if purchase_prices and sale_prices[0] == purchase_prices[-1]:
             result += (f"<p>The highest buyer matches the lowest seller (<span style='color:#add8e6'>{sale_prices[0]}p</span>),"
-                       f" recommendation for immediate sale is to sell to the highest buyer.<br></p>")
+                       f" recommendation for immediate sale is to sell to the highest buyer.<br></p>") 
         elif purchase_prices and sale_prices:
             distance = abs(sale_prices[0] - purchase_prices[-1])
             result += (f"The highest buyer and lowest seller are <span style='color:#add8e6'>{distance}p</span> apart.<br>"
                        f" The highest <u>buyer</u> is at <span style='color:#add8e6'>{purchase_prices[-1]}p</span>"
-                       f" and the lowest <u>seller</u> is at <span style='color:#add8e6'>{sale_prices[0]}p</span>.")
-        else:
-            result += "<h2>No Notices</h2>"
-            
+                       f" and the lowest <u>seller</u> is at <span style='color:#add8e6'>{sale_prices[0]}p</span>.")            
+        try:
+            highest_buy = purchase_prices[-1]
+        except IndexError:
+            highest_buy = 0
+        
+        buy_recommendation = max(highest_buy, (round((sale_prices[0]-1)*.85)))
+        fast_profit_margin = sale_prices[0] - buy_recommendation
+        
         # Price recommendations
         result +=f"<h1>Pricing Recommendations</h1>"
-        result +=f"<div class='border-container-1'>"
+        if top_buyer != "No buyers" and abs(recommendation - top_buyer) <= 5:
+            result += f"You should consider fulfilling the top buy order of <span style='color:#add8e6'>{top_buyer}p</span>, it is only <span style='color:#add8e6'>{abs(recommendation - top_buyer)}p</span> away from what is being recommended. This will be the quickest sale."
         result +=f"<table>"
         result +=f"<tr>"
-        result +=f"<th></th>"
-        result +=f"<th>Platinum</th>"
+        result += "<td class='col-1'></td>"
+        result +=f"<td class='col-2'>Platinum</td>"
         result +=f"</tr>"
-        if part_sum != 0:
-            result +=f"<tr>"
-            result +=f"<td class='col-1'>Sum of parts</td>"
-            result +=f"<td class='col-2'><span style='color:#add8e6'>{part_sum}p</span></td>"
-            result +=f"</tr>"
         result +=f"<tr>"
-        result +=f"<td class='col-1'>Most Common Price</td>"
-        result +=f"<td class='col-2'><span style='color:#add8e6'>{mode[0]}p</span></td>"
-        result +=f"</tr>" 
-        result +=f"<tr>"
-        result +=f"<td class='col-1'>Balanced Offer</td>"
-        result +=f"<td class='col-2'><span style='color:#add8e6'>{recommendation}p</span></td>"
-        result +=f"</tr>" 
+        result +=f"<td colspan='2'><b>Info</b></td>"
+        result +=f"</tr>"
         result +=f"<tr>"
         result +=f"<td class='col-1'>Average Price (Adjusted)</td>"
         result +=f"<td class='col-2'><span style='color:#add8e6'>{round(average_cost)}p</span></td>"
         result +=f"</tr>"
+        result +=f"<tr>"
+        result +=f"<td class='col-1'>Most Common Price</td>"
+        result +=f"<td class='col-2'><span style='color:#add8e6'>{mode[0]}p</span></td>"
+        result +=f"</tr>"
+        if part_sum != 0:
+            result +=f"<tr>"
+            result +=f"<td class='col-1'>Sum of Set Parts</td>"
+            result +=f"<td class='col-2'><span style='color:#add8e6'>{part_sum}p</span></td>"
+            result +=f"</tr>"
+        result +=f"<tr>"
+        result +=f"<td class='col-1'>Highest Buy Order</td>"
+        result +=f"<td class='col-2'><span style='color:#add8e6'>{highest_buy}p</span></td>"
+        result +=f"</tr>"
+        result +=f"<tr>"
+        result +=f"<td colspan='2'><b><a href='https://warframe.market/items/{slug}?type=sell'>Sale Recommendations</a></b></td>"
+        result +=f"</tr>"
+        result +=f"<tr>"
+        result +=f"<td class='col-1'>Balanced Offer</td>"
+        result +=f"<td class='col-2'><span style='color:#add8e6'>{recommendation}p</span></td>"
+        result +=f"</tr>" 
         result +=f"<tr>"
         result +=f"<td class='col-1'>Match Lowest</td>"
         result +=f"<td class='col-2'><span style='color:#add8e6'>{sale_prices[0]}p</span></td>"
@@ -266,12 +282,30 @@ class PriceRecommender():
         result +=f"<td class='col-1'>Beat Lowest <span style='color:#c64c4c'><b>(Not Recommended)</span></td>"
         result +=f"<td class='col-2'><span style='color:#add8e6'>{sale_prices[0]-1}p</span></td>"
         result +=f"</tr>" 
+        result +=f"<tr>"
+        result +=f"<td colspan=2><b><a href='https://warframe.market/items/{slug}?type=buy'>Purchase Recommendations</a></b></td>"
+        result +=f"</tr>"
+        result +=f"<tr>"
+        result +=f"<td class='col-1'>Good Buy Estimate</td>"
+        result +=f"<td class='col-2'><span style='color:#add8e6'>{buy_recommendation}p</span></td>"
+        result +=f"</tr>"
+        if fast_profit_margin == 0:
+            result +=f"<tr>"
+            result +=f"<td class='col-1'>Profit Selling at the Current Lowest Price</td>"
+            result +=f"<td class='col-2'>Break Even</td>"
+            result +=f"</tr>"
+        elif fast_profit_margin < 0:
+            result +=f"<tr>"
+            result +=f"<td class='col-1'>Profit Selling at the Current Lowest Price</td>"
+            result +=f"<td class='col-2'><span style='color:#c64c4c'>Loss Likely</span></td>"
+            result +=f"</tr>"
+        else:
+            result +=f"<tr>"
+            result +=f"<td class='col-1'>Profit Selling at the Current Lowest Price</td>"
+            result +=f"<td class='col-2'><span style='color:#add8e6'>{fast_profit_margin}p</span></td>"
+            result +=f"</tr>"
         result +=f"</table>"
-        result +=f"</div>"
-        
-        if top_buyer != "No buyers" and abs(recommendation - top_buyer) <= 5:
-            result += f"You should consider fulfilling the top buy order of <span style='color:#add8e6'>{top_buyer}p</span>, it is only <span style='color:#add8e6'>{abs(recommendation - top_buyer)}p</span> away from what is being recommended. This will be the quickest sale."
-                
+                        
         # Detailed results
         result +=f"<h1>Details</h1>"
         result += (
@@ -368,7 +402,7 @@ class PriceRecommender():
             part_sum = self._sum_of_parts(set_data)
         url = self._create_url(slug)
         response = self._get_request(url)
-        seller_data, buyer_data = self._process_data(response)
+        seller_data, buyer_data = self._process_data(response, ignore_date=True)
         if part_sum != 0:
             result_str = self._process_pricing_recommendations(name, url, slug, seller_data, buyer_data, part_sum)
         else:
